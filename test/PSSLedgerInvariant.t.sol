@@ -47,13 +47,14 @@ contract LedgerHandler is Test {
         address to = _anyRecipient(recipientSeed);
         uint256 amount = bound(rawAmount, 0, ghostManager);
         uint256 fee = to == manager ? 0 : amount * 300 / 10_000;
+        uint256 eligibleBefore = token.eligibleSupply();
         vm.prank(manager);
         token.transfer(to, amount);
         ghostManager -= amount;
         ghostReserve += fee;
         ghostFees += fee;
         _credit(to, amount - fee);
-        if (fee != 0 && token.eligibleSupply() != 0) ++distributions;
+        if (fee != 0 && eligibleBefore != 0) ++distributions;
         _afterCall();
     }
 
@@ -113,13 +114,14 @@ contract LedgerHandler is Test {
         address actor = actors[actorSeed % actors.length];
         uint256 amount = bound(rawAmount, 0, ghostManager);
         uint256 fee = amount * 300 / 10_000;
+        uint256 eligibleBefore = token.eligibleSupply();
         vm.prank(manager);
         token.transfer(actor, amount);
         ghostManager -= amount;
         ghostReserve += fee;
         ghostFees += fee;
         ghost[actor] += amount - fee;
-        if (fee != 0 && token.eligibleSupply() != 0) ++distributions;
+        if (fee != 0 && eligibleBefore != 0) ++distributions;
         uint256 owed = token.claimableDividends(actor);
         vm.prank(actor);
         uint256 got = token.claim();
@@ -193,6 +195,33 @@ contract PSSLedgerInvariantTest is Test {
         selectors[4] = LedgerHandler.roundTrip.selector;
         selectors[5] = LedgerHandler.managerSelfTransfer.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
+    }
+
+    /// @dev Minimized failure sequence: the last holder exits, then an empty holder buys,
+    /// attempts to claim and sells. Fees queue because there was no pre-buy eligible supply.
+    function test_EmptyFloatRoundTripDoesNotCountQueuedFeesAsDistributed() public {
+        handler.roundTrip(0, 0);
+        handler.roundTrip(1, 300);
+        assertEq(token.eligibleSupply(), 0);
+        assertEq(token.queuedDividends(), 9);
+        assertEq(handler.distributions(), 0);
+        invariant_FeesAreCollectedOnceAndNeverOverpaid();
+
+        handler.buy(1, 1000);
+        assertEq(token.queuedDividends(), 39);
+        assertEq(handler.distributions(), 0);
+        assertEq(token.claimableDividends(handler.actors(1)), 0);
+        invariant_FeesAreCollectedOnceAndNeverOverpaid();
+
+        handler.buy(2, 1000);
+        assertEq(token.queuedDividends(), 0);
+        assertEq(handler.distributions(), 1);
+        assertApproxEqAbs(token.claimableDividends(handler.actors(1)), 69, 1);
+        assertEq(token.claimableDividends(handler.actors(2)), 0);
+        handler.claim(1);
+        invariant_FeesAreCollectedOnceAndNeverOverpaid();
+        invariant_EveryBalanceMatchesTheGhostLedger();
+        invariant_ExcludedAddressesNeverHaveDividends();
     }
 
     /// forge-config: default.invariant.runs = 256

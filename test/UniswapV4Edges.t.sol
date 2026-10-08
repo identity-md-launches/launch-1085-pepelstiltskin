@@ -234,7 +234,7 @@ contract UniswapV4EdgesTest is Test {
     // Output taken to a third party (router pattern)
     // ---------------------------------------------------------------------------------------
 
-    function test_OutputTakenToRouterIsTaxedOnceAndRouterKeepsTheDividend() public {
+    function test_OutputTakenToRouterIsTaxedOnceAndLaterDividendsStayWithRouter() public {
         _launch(true);
         Forwarder router = new Forwarder();
         BalanceDelta delta = trader.swap(key, false, -0.01 ether, false, false, address(router));
@@ -243,11 +243,18 @@ contract UniswapV4EdgesTest is Test {
         assertEq(token.balanceOf(address(router)), gross - fee);
         assertEq(token.balanceOf(address(trader)), 0);
         assertEq(token.totalFeesCollected(), fee);
+        assertEq(token.claimableDividends(address(router)), 0);
+        assertApproxEqAbs(token.claimableDividends(CLAIMANT), fee, 1);
+
+        // A later buy occurs while the router still holds the first output.
+        BalanceDelta later = trader.swap(key, false, -0.01 ether, false, false, address(other));
+        uint256 laterFee = uint256(uint128(later.amount0())) * 3 / 100;
         uint256 routerOwed = token.claimableDividends(address(router));
         assertGt(routerOwed, 0);
+        assertApproxEqAbs(routerOwed, laterFee * (gross - fee) / (SUPPLY / 10 + gross - fee), 1);
         router.forward(token, USER);
         assertEq(token.balanceOf(USER), gross - fee, "forwarding must not be taxed");
-        assertEq(token.totalFeesCollected(), fee, "forwarding must not collect a second fee");
+        assertEq(token.totalFeesCollected(), fee + laterFee, "forwarding must not collect a second fee");
         assertEq(token.claimableDividends(USER), 0);
         assertEq(token.claimableDividends(address(router)), routerOwed);
         // The user can still sell what arrived, untaxed, and the pool settles.
@@ -290,8 +297,8 @@ contract UniswapV4EdgesTest is Test {
 
     /// @dev A trader who took swap output as ERC-6909 claims holds no PSS and pays no fee until the
     /// claims are redeemed; redemption is a manager outflow and pays the full 3% on the amount taken.
-    /// The untaxed in-manager round trip this permits is reported in .imd-findings.json rather than
-    /// asserted here.
+    /// The first redemption earns no dividend on its new receipt; tokens already redeemed earn
+    /// their pro rata share when the remaining claims are redeemed later.
     function test_RedeemingClaimsPaysTheFeeOnTheAmountTaken() public {
         _launch(true);
         uint256 poolBefore = token.balanceOf(MANAGER);
@@ -311,7 +318,27 @@ contract UniswapV4EdgesTest is Test {
         assertEq(token.balanceOf(address(token)), fee);
         assertEq(token.totalFeesCollected(), fee);
         assertEq(IERC6909Claims(MANAGER).balanceOf(address(trader), key.currency0.toId()), gross - half);
-        assertGt(token.claimableDividends(address(trader)), 0);
+        assertEq(token.claimableDividends(address(trader)), 0);
+        assertApproxEqAbs(token.claimableDividends(CLAIMANT), fee, 1);
+        assertEq(manager.getNonzeroDeltaCount(), 0);
+        assertFalse(manager.isUnlocked());
+
+        uint256 remaining = gross - half;
+        uint256 laterFee = remaining * 3 / 100;
+        uint256 eligibleBefore = SUPPLY / 10 + half - fee;
+        trader.redeem(key.currency0, remaining);
+        assertEq(token.balanceOf(address(trader)), gross - fee - laterFee);
+        assertEq(token.balanceOf(MANAGER), poolBefore - gross);
+        assertEq(token.balanceOf(address(token)), fee + laterFee);
+        assertEq(token.totalFeesCollected(), fee + laterFee);
+        assertEq(IERC6909Claims(MANAGER).balanceOf(address(trader), key.currency0.toId()), 0);
+        uint256 owed = token.claimableDividends(address(trader));
+        assertGt(owed, 0);
+        assertApproxEqAbs(owed, laterFee * (half - fee) / eligibleBefore, 1);
+        assertEq(trader.claim(token), owed);
+        assertEq(token.balanceOf(address(trader)), gross - fee - laterFee + owed);
+        assertEq(token.balanceOf(address(token)), fee + laterFee - owed);
+        assertEq(trader.claim(token), 0);
         assertEq(manager.getNonzeroDeltaCount(), 0);
         assertFalse(manager.isUnlocked());
     }

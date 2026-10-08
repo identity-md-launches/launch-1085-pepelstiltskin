@@ -203,8 +203,23 @@ contract PSSTokenEdgesTest is Test {
         assertEq(token.balanceOf(MANAGER), 0);
         assertEq(token.balanceOf(ALICE), SUPPLY - SUPPLY * 3 / 100);
         assertEq(token.balanceOf(address(token)), SUPPLY * 3 / 100);
-        // Alice is the only eligible holder, so the whole fee is hers (minus global dust).
-        assertApproxEqAbs(token.claimableDividends(ALICE), SUPPLY * 3 / 100, 1);
+        // No holder was eligible before this buy: Alice cannot reclaim her own fee.
+        assertEq(token.queuedDividends(), SUPPLY * 3 / 100);
+        assertEq(token.claimableDividends(ALICE), 0);
+        vm.prank(ALICE);
+        assertEq(token.claim(), 0);
+        assertEq(token.balanceOf(address(token)), SUPPLY * 3 / 100);
+
+        // Refill and empty the manager again. Alice's existing balance earns the queued fee
+        // and this later buy's fee; Bob's newly received balance earns neither.
+        vm.prank(ALICE);
+        token.transfer(MANAGER, 100 ether);
+        vm.prank(MANAGER);
+        token.transfer(BOB, 100 ether);
+        assertEq(token.balanceOf(MANAGER), 0);
+        assertEq(token.queuedDividends(), 0);
+        assertEq(token.claimableDividends(BOB), 0);
+        assertApproxEqAbs(token.claimableDividends(ALICE), SUPPLY * 3 / 100 + 3 ether, 1);
         vm.prank(ALICE);
         token.claim();
         assertLe(token.balanceOf(address(token)), 1);
@@ -236,16 +251,18 @@ contract PSSTokenEdgesTest is Test {
     // Dividend accounting edges
     // ---------------------------------------------------------------------------------------
 
-    function test_DividendsDistributedEventReportsPostTransferEligibleSupply() public {
+    function test_DividendsDistributedEventReportsPreBuyEligibleSupply() public {
         token.transfer(ALICE, 19_400 ether);
         token.transfer(BOB, 9700 ether);
         token.transfer(MANAGER, SUPPLY - 29_100 ether);
-        // Eligible supply at distribution time includes Carol's net receipt (9700) but not the fee.
+        // Only Alice and Bob hold tokens when this fee is distributed.
         vm.expectEmit(false, false, false, true, address(token));
-        emit DividendsDistributed(300 ether, 38_800 ether);
+        emit DividendsDistributed(300 ether, 29_100 ether);
         vm.prank(MANAGER);
         token.transfer(CAROL, 10_000 ether);
-        assertEq(token.magnifiedDividendPerShare(), 300 ether * MAGNITUDE / 38_800 ether);
+        assertEq(token.magnifiedDividendPerShare(), 300 ether * MAGNITUDE / 29_100 ether);
+        assertEq(token.eligibleSupply(), 38_800 ether);
+        assertEq(token.claimableDividends(CAROL), 0);
     }
 
     /// @dev A buy routed to the token contract itself: the fee is distributed, the net is a donation
@@ -356,14 +373,13 @@ contract PSSTokenEdgesTest is Test {
         assertEq(token.balanceOf(MANAGER), managerBefore + 1000 ether + claimed);
         assertEq(token.totalFeesCollected(), feesBefore, "a sell of claimed tokens must not be taxed");
         assertEq(token.claimableDividends(ALICE), 0);
-        // Bob is now the only eligible holder; Alice's buy-back pays a fee that Bob and Alice share.
+        // Bob is the only holder before Alice's buy-back, so he earns its entire fee.
         vm.prank(MANAGER);
         token.transfer(ALICE, 1000 ether);
         assertEq(token.totalFeesCollected(), feesBefore + 30 ether);
         assertEq(token.balanceOf(ALICE), 970 ether);
-        uint256 eligible = 1970 ether;
-        assertApproxEqAbs(token.claimableDividends(ALICE), 30 ether * 970 ether / eligible, 1);
-        assertApproxEqAbs(token.claimableDividends(BOB), 15 ether + 30 ether * 1000 ether / eligible, 2);
+        assertEq(token.claimableDividends(ALICE), 0);
+        assertApproxEqAbs(token.claimableDividends(BOB), 45 ether, 2);
     }
 
     /// @dev A holder who exits earns nothing from fees paid while away and resumes earning on return.
@@ -392,8 +408,8 @@ contract PSSTokenEdgesTest is Test {
         assertLe(token.balanceOf(address(token)), 2);
     }
 
-    /// @dev Integrator hazard the README documents: an intermediary that briefly holds manager output
-    /// earns the dividend of that buy; forwarding the tokens does not forward the entitlement.
+    /// @dev An intermediary earns only on balances held before a later buy. Forwarding its
+    /// tokens does not forward that entitlement, and claimFor pays only the intermediary.
     function test_IntermediaryKeepsDividendsEarnedWhileHolding() public {
         ForwardingRouter router = new ForwardingRouter();
         token.transfer(ALICE, 1000 ether);
@@ -401,6 +417,10 @@ contract PSSTokenEdgesTest is Test {
         vm.prank(MANAGER);
         token.transfer(address(router), 1000 ether);
         assertEq(token.balanceOf(address(router)), 970 ether);
+        assertEq(token.claimableDividends(address(router)), 0);
+        assertApproxEqAbs(token.claimableDividends(ALICE), 30 ether, 1);
+        vm.prank(MANAGER);
+        token.transfer(CAROL, 1000 ether);
         uint256 routerOwed = token.claimableDividends(address(router));
         uint256 fee = 30 ether;
         assertApproxEqAbs(routerOwed, fee * 970 ether / 1970 ether, 1);
@@ -409,7 +429,13 @@ contract PSSTokenEdgesTest is Test {
         assertEq(token.balanceOf(address(router)), 0);
         assertEq(token.claimableDividends(BOB), 0, "forwarded tokens must not carry history");
         assertEq(token.claimableDividends(address(router)), routerOwed);
-        assertEq(token.totalFeesCollected(), 30 ether);
+        assertEq(token.totalFeesCollected(), 60 ether);
+        vm.prank(STRANGER);
+        assertEq(token.claimFor(address(router)), routerOwed);
+        assertEq(token.balanceOf(address(router)), routerOwed);
+        assertEq(token.balanceOf(STRANGER), 0);
+        assertEq(token.balanceOf(BOB), 970 ether);
+        assertEq(token.claimFor(address(router)), 0);
     }
 
     /// @dev Contract holders claim like anyone else; the token makes no callback that could revert.
@@ -512,9 +538,10 @@ contract PSSTokenEdgesTest is Test {
             if (action == 0) {
                 amount = bound(amount, 0, token.balanceOf(MANAGER));
                 uint256 fee = amount * 300 / 10_000;
+                uint256 eligibleBefore = token.eligibleSupply();
                 vm.prank(MANAGER);
                 token.transfer(actor, amount);
-                if (fee != 0 && token.eligibleSupply() != 0) ++distributions;
+                if (fee != 0 && eligibleBefore != 0) ++distributions;
             } else if (action == 1) {
                 amount = bound(amount, 0, token.balanceOf(actor));
                 vm.prank(actor);
