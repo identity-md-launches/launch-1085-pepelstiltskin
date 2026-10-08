@@ -1,0 +1,24 @@
+{
+  "kind": "custom_token",
+  "token": {
+    "contract": "PSSToken",
+    "name": "Pepelstiltskin",
+    "symbol": "PSS",
+    "decimals": 18,
+    "constructorArgs": [],
+    "totalSupply": "1000000000000000000000000000"
+  },
+  "contracts": [],
+  "pool": {
+    "pairedCurrency": "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+    "fee": 3000,
+    "tickSpacing": 60,
+    "initialPrice": "125270724187523965593206900"
+  },
+  "economics": {
+    "poolBps": 9000,
+    "initialMarketCapWei": "2500000000000000000000",
+    "remainderTo": "0x000000000000000000000000000000000000dead"
+  },
+  "notes": "Ethereum mainnet (1). Entire fixed supply is minted to the deploying launch factory. Factory distributes the external 10% swarm allocation, seeds 90% through PoolManager and forwards any seed rounding remainder to economics.remainderTo. No application contracts. Only transfers from the specified mainnet PoolManager are taxed 3%; transfers to it are untaxed. Dividends are PSS, allocated using post-transfer eligible balances. Mandatory pool fee 3000 (0.30%) takes precedence over the earlier 1.25% description. The 1% creator-fee routing to SIMD is an external launchpad responsibility; this token neither configures nor collects it. initialPrice is provenance only; the deployer derives the opening price from economics and actual currency order."
+}
