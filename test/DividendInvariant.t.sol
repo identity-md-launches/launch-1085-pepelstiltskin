@@ -50,12 +50,17 @@ contract DividendHandler is Test {
         assertEq(token.claimableDividends(to), toOwed);
     }
 
-    function claim(uint256 who) external {
+    function claim(uint256 who, bool thirdParty) external {
         address actor = actors[who % actors.length];
         uint256 owed = token.claimableDividends(actor);
         uint256 balance = token.balanceOf(actor);
-        vm.prank(actor);
-        uint256 received = token.claim();
+        uint256 received;
+        if (thirdParty) {
+            received = token.claimFor(actor);
+        } else {
+            vm.prank(actor);
+            received = token.claim();
+        }
         claimed += received;
         assertEq(received, owed);
         assertEq(token.balanceOf(actor), balance + owed);

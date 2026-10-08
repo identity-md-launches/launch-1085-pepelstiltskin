@@ -195,7 +195,8 @@ contract UniswapV4Test is Test {
 
         uint256 pairBefore = PairFixture(PAIRED).balanceOf(address(trader));
         uint256 dividendsBefore = token.claimableDividends(address(trader));
-        assertGt(dividendsBefore, 0);
+        assertEq(dividendsBefore, 0);
+        assertApproxEqAbs(token.claimableDividends(CLAIMANT), fee, 1);
         if (shortPay) {
             vm.expectRevert(IPoolManager.CurrencyNotSettled.selector);
             trader.swap(key, tokenFirst, -int256(bought), true);

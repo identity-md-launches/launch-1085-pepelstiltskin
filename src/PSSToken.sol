@@ -45,17 +45,27 @@ contract PSSToken is ERC20 {
     }
 
     /// @notice Claim only the caller's dividends. An empty or repeated claim returns zero.
-    /// @dev No external calls or receiver callbacks. Fractional entitlements survive claims.
     function claim() external returns (uint256 amount) {
-        _accrue(msg.sender);
-        amount = _accrued[msg.sender] / MAGNITUDE;
+        return _claim(msg.sender);
+    }
+
+    /// @notice Anyone may trigger a payout to the holder; the caller cannot redirect it.
+    /// @dev Supports contract holders that cannot call claim() themselves.
+    function claimFor(address account) external returns (uint256 amount) {
+        return _claim(account);
+    }
+
+    /// @dev No external calls or receiver callbacks. Fractional entitlements survive claims.
+    function _claim(address account) private returns (uint256 amount) {
+        _accrue(account);
+        amount = _accrued[account] / MAGNITUDE;
         if (amount == 0) return 0;
 
-        _accrued[msg.sender] %= MAGNITUDE;
+        _accrued[account] %= MAGNITUDE;
         totalDividendsClaimed += amount;
-        // The caller was checkpointed above: claimed tokens earn only future dividends.
-        super._update(address(this), msg.sender, amount);
-        emit DividendClaimed(msg.sender, amount);
+        // The holder was checkpointed above: claimed tokens earn only future dividends.
+        super._update(address(this), account, amount);
+        emit DividendClaimed(account, amount);
     }
 
     function _update(address from, address to, uint256 amount) internal override {
@@ -69,9 +79,10 @@ contract PSSToken is ERC20 {
             uint256 fee = amount * BUY_FEE_BPS / BPS_DENOMINATOR;
             if (fee != 0) {
                 super._update(from, address(this), fee);
-                super._update(from, to, amount - fee);
                 totalFeesCollected += fee;
                 _distribute(fee);
+                _accrue(to);
+                super._update(from, to, amount - fee);
                 return;
             }
         }
@@ -89,7 +100,7 @@ contract PSSToken is ERC20 {
         _paidIndex[account] = index;
     }
 
-    /// @dev Distribute after the net buy arrives, so the buyer shares in this fee.
+    /// @dev Distribute before the net buy arrives; only pre-buy balances share in this fee.
     /// Fees with no eligible holder wait for the next positive-fee buy with eligible supply.
     /// Global division dust stays in reserve; it is never allocated a second time.
     function _distribute(uint256 fee) private {

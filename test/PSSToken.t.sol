@@ -100,13 +100,13 @@ contract PSSTokenTest is Test {
         assertEq(token.totalFeesCollected(), 0);
     }
 
-    function test_PostBuyProRataDividendsAndClaims() public {
+    function test_PreBuyProRataDividendsAndClaims() public {
         _threeHolders();
-        // After the buy, Alice owns 1/2, Bob 1/4 and Carol 1/4 of eligible supply.
+        // Before the buy, Alice owns 2/3 and Bob 1/3. Carol's new receipt earns nothing yet.
         assertEq(token.eligibleSupply(), 38_800 ether);
-        assertApproxEqAbs(token.claimableDividends(ALICE), 150 ether, 1);
-        assertApproxEqAbs(token.claimableDividends(BOB), 75 ether, 1);
-        assertApproxEqAbs(token.claimableDividends(CAROL), 75 ether, 1);
+        assertApproxEqAbs(token.claimableDividends(ALICE), 200 ether, 1);
+        assertApproxEqAbs(token.claimableDividends(BOB), 100 ether, 1);
+        assertEq(token.claimableDividends(CAROL), 0);
         uint256 owed = token.claimableDividends(ALICE);
         vm.expectEmit(true, false, false, true, address(token));
         emit PSSToken.DividendClaimed(ALICE, owed);
@@ -190,11 +190,15 @@ contract PSSTokenTest is Test {
         assertEq(token.magnifiedDividendPerShare(), 0);
         assertEq(token.eligibleSupply(), 0);
         _buy(ALICE, 1000 ether);
+        assertEq(token.queuedDividends(), 60 ether);
+        assertEq(token.claimableDividends(ALICE), 0);
+        _buy(BOB, 1000 ether);
         assertEq(token.queuedDividends(), 0);
-        assertApproxEqAbs(token.claimableDividends(ALICE), 60 ether, 1);
+        assertApproxEqAbs(token.claimableDividends(ALICE), 90 ether, 1);
+        assertEq(token.claimableDividends(BOB), 0);
         vm.prank(ALICE);
         uint256 claimed = token.claim();
-        assertEq(token.balanceOf(address(token)), 60 ether - claimed);
+        assertEq(token.balanceOf(address(token)), 90 ether - claimed);
     }
 
     function test_DirectDonationsAreNotMistakenForFees() public {
@@ -328,8 +332,8 @@ contract PSSTokenTest is Test {
         assertEq(token.balanceOf(ALICE), amount - fee);
         assertEq(token.balanceOf(address(token)), fee);
         assertEq(token.balanceOf(MANAGER) + token.balanceOf(address(this)) + token.balanceOf(ALICE) + fee, SUPPLY);
-        uint256 eligible = token.eligibleSupply();
-        assertApproxEqAbs(token.claimableDividends(ALICE), fee * (amount - fee) / eligible, 1);
+        assertEq(token.claimableDividends(ALICE), 0);
+        assertApproxEqAbs(token.claimableDividends(address(this)), fee, 1);
         vm.prank(ALICE);
         token.claim();
         token.claim();
